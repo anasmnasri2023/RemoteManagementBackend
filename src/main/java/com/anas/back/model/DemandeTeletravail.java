@@ -2,8 +2,11 @@ package com.anas.back.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 @Entity
 @Table(name = "demandes_teletravail")
@@ -16,118 +19,112 @@ public class DemandeTeletravail {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
+    @CreationTimestamp
+    @Column(name = "date_creation", nullable = false, updatable = false)
+    private LocalDateTime dateCreation;
+    // ── Champs du diagramme ───────────────────────────────────────────────────
     @Column(nullable = false)
     private LocalDate dateDebut;
 
     @Column(nullable = false)
     private LocalDate dateFin;
 
+    private LocalTime heure;
+
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private LocalDateTime heure;
+    @Builder.Default
+    private StatutDemande statut = StatutDemande.EN_ATTENTE_MANAGER;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 50)
-    private StatutDemande statut;
-
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 30)
+    @Column(nullable = false)
     private TypeTeletravail type;
 
-    @Column(columnDefinition = "TEXT")
     private String justification;
 
+    // ── Relations ─────────────────────────────────────────────────────────────
+    // L'employé qui a créé la demande (lié à User via son rôle EMPLOYE)
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "employe_id", nullable = false)
     private User employe;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "manager_id")
-    private User manager;
+    // ── Méthodes métier du diagramme ──────────────────────────────────────────
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "rh_id")
-    private User rh;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "politique_id")
-    private PolitiqueTeletravail politique;
-
-    @Column(columnDefinition = "TEXT")
-    private String commentaireManager;
-
-    @Column(columnDefinition = "TEXT")
-    private String commentaireRH;
-
-    @Column(nullable = false, updatable = false)
-    private LocalDateTime dateCreation;
-
-    private LocalDateTime dateModification;
-
-    private LocalDateTime dateValidationManager;
-
-    private LocalDateTime dateValidationRH;
-
-    @PrePersist
-    protected void onCreate() {
-        dateCreation = LocalDateTime.now();
-        heure = LocalDateTime.now();
-
-        // Par défaut : EN_ATTENTE
-        if (statut == null) {
-            statut = StatutDemande.EN_ATTENTE;
-        }
-    }
-
-    @PreUpdate
-    protected void onUpdate() {
-        dateModification = LocalDateTime.now();
-    }
-
-    // ========================
-    // Méthodes métier
-    // ========================
-
-    public Boolean modifier() {
-        if (this.statut == StatutDemande.EN_ATTENTE) {
-            this.dateModification = LocalDateTime.now();
+    /**
+     * Soumettre() : Boolean
+     * L'employé soumet la demande → statut initial EN_ATTENTE_MANAGER
+     */
+    public boolean soumettre() {
+        // Une demande ne peut être soumise que si elle est nouvelle (pas encore de statut)
+        if (this.statut == null || this.statut == StatutDemande.EN_ATTENTE_MANAGER) {
+            this.statut = StatutDemande.EN_ATTENTE_MANAGER;
             return true;
         }
         return false;
     }
 
-    public Boolean annuler() {
-        if (this.statut != StatutDemande.VALIDEE &&
-                this.statut != StatutDemande.ANNULEE) {
+    /**
+     * Modifier() : Boolean
+     * L'employé peut modifier uniquement si la demande est encore EN_ATTENTE_MANAGER
+     */
+    public boolean modifier() {
+        return this.statut == StatutDemande.EN_ATTENTE_MANAGER;
+    }
 
+    /**
+     * Annuler() : Boolean
+     * L'employé peut annuler si la demande est EN_ATTENTE_MANAGER ou EN_ATTENTE_RH
+     */
+    public boolean annuler() {
+        if (this.statut == StatutDemande.EN_ATTENTE_MANAGER
+                || this.statut == StatutDemande.EN_ATTENTE_RH) {
             this.statut = StatutDemande.ANNULEE;
-            this.dateModification = LocalDateTime.now();
             return true;
         }
         return false;
     }
 
-    public Boolean validerManager() {
-        if (this.statut == StatutDemande.EN_ATTENTE) {
-            this.dateValidationManager = LocalDateTime.now();
+    /**
+     * validerManager() : Boolean — Validation N1 par le Manager
+     * Si accepté → passe à EN_ATTENTE_RH
+     */
+    public boolean validerManager() {
+        if (this.statut == StatutDemande.EN_ATTENTE_MANAGER) {
+            this.statut = StatutDemande.EN_ATTENTE_RH;
             return true;
         }
         return false;
     }
 
-    public Boolean validerRH() {
-        if (this.statut == StatutDemande.EN_ATTENTE) {
-            this.statut = StatutDemande.VALIDEE;
-            this.dateValidationRH = LocalDateTime.now();
+    /**
+     * rejeterManager() : Boolean — Rejet N1 par le Manager
+     */
+    public boolean rejeterManager() {
+        if (this.statut == StatutDemande.EN_ATTENTE_MANAGER) {
+            this.statut = StatutDemande.REJETEE_MANAGER;
             return true;
         }
         return false;
     }
 
-    public Boolean rejeter() {
-        if (this.statut == StatutDemande.EN_ATTENTE) {
-            this.statut = StatutDemande.REJETEE;
-            this.dateModification = LocalDateTime.now();
+    /**
+     * validerRH() : Boolean — Validation N2 par le RH
+     * Seulement si déjà validée par le Manager (EN_ATTENTE_RH)
+     */
+    public boolean validerRH() {
+        if (this.statut == StatutDemande.EN_ATTENTE_RH) {
+            this.statut = StatutDemande.APPROUVEE;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * rejeterRH() : Boolean — Rejet N2 par le RH
+     */
+    public boolean rejeterRH() {
+        if (this.statut == StatutDemande.EN_ATTENTE_RH) {
+            this.statut = StatutDemande.REJETEE_RH;
             return true;
         }
         return false;
